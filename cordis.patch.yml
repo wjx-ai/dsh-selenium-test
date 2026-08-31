@@ -1,0 +1,6 @@
+# DSH Selenium 浏览器自动化测试插件
+# 插入到 web profile 的 roster 中
+
+- insert:
+    - id: selenium-test
+      name: '@wjx-ai/dsh-selenium-test'
