@@ -135,9 +135,9 @@ def run_test(spec):
         return _usage_error("actions 必须是数组")
     timeout = int(spec.get("timeout", 30000)) or 30000
     options = spec.get("options") or {}
-    headless = options.get("headless", True)
+    headless = options.get("headless", False)
     if headless is None:
-        headless = True
+        headless = False
     width = int(options.get("width", 1920))
     height = int(options.get("height", 1080))
 

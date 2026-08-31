@@ -1,6 +1,6 @@
 {
   "name": "@wjx-ai/dsh-selenium-test",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "DSH（DeepSeek Harness）Selenium 浏览器自动化测试工具插件：注册 selenium_test 工具，通过真实浏览器对网页执行点击/输入/截图/等待/断言/跳转/执行 JS 等操作并返回每步结果与截图路径。",
   "type": "module",
   "main": "lib/index.js",
