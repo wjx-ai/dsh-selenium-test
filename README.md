@@ -55,7 +55,7 @@ dsh plugin --profile web add github:wjx-ai/dsh-selenium-test
 
 ## 变更记录
 
-### v1.1（2026-07-08）—— SPA 健壮性升级（需重启 DSH 生效）
+### v0.1.7（2026-07-08）—— SPA 健壮性升级（需重启 DSH 生效）
 
 `lib/selenium_test.py` 新增/增强（向后兼容,旧调用不受影响）：
 
