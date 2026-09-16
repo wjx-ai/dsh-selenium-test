@@ -84,6 +84,49 @@ def _run_one(driver, By, WebDriverWait, EC, action, index, screenshots):
             step["url"] = driver.current_url
         elif t in ({"click", "click_js"}):
             _find(driver, By, WebDriverWait, EC, action).click()
+        elif t == "click_by_text":
+            # 通过可见文本精确/模糊匹配点击
+            text = action.get("text") or action.get("value")
+            if not text:
+                raise ValueError("click_by_text 缺少 text/value")
+            exact = action.get("exact", True)
+            xpath = "//*[normalize-space()=%s]" % ("'%s'" % text if exact else "contains(., '%s')" % text)
+            el = WebDriverWait(driver, float(action.get("wait", 10))).until(
+                EC.element_to_be_clickable((By.XPATH, xpath))
+            )
+            el.click()
+            step["matched_text"] = text
+        elif t == "wait_for_element":
+            # 显式等待元素出现/可见/可点击
+            condition = (action.get("condition") or "presence").lower()
+            _find(driver, By, WebDriverWait, EC, action)
+            if condition == "visible":
+                WebDriverWait(driver, float(action.get("wait", 10))).until(
+                    EC.visibility_of_element_located((getattr(By, _resolve_by(action)), action.get("selector") or action.get("value")))
+                )
+            elif condition == "clickable":
+                WebDriverWait(driver, float(action.get("wait", 10))).until(
+                    EC.element_to_be_clickable((getattr(By, _resolve_by(action)), action.get("selector") or action.get("value")))
+                )
+            step["condition"] = condition
+        elif t == "click_and_wait":
+            # 点击并等待导航/元素变化（适配 SPA 导航）
+            _find(driver, By, WebDriverWait, EC, action).click()
+            wait_sel = action.get("wait_selector")
+            wait_cond = (action.get("wait_condition") or "presence").lower()
+            wait_seconds = float(action.get("wait", 10))
+            if wait_sel:
+                by_name = _resolve_by({"selector": wait_sel, "by": action.get("wait_by", "css")})
+                by = getattr(By, by_name)
+                if wait_cond == "visible":
+                    WebDriverWait(driver, wait_seconds).until(EC.visibility_of_element_located((by, wait_sel)))
+                elif wait_cond == "clickable":
+                    WebDriverWait(driver, wait_seconds).until(EC.element_to_be_clickable((by, wait_sel)))
+                else:
+                    WebDriverWait(driver, wait_seconds).until(EC.presence_of_element_located((by, wait_sel)))
+            else:
+                # 无显式选择器：等待 URL 变化或 document.readyState
+                WebDriverWait(driver, wait_seconds).until(lambda d: d.execute_script("return document.readyState") == "complete")
         elif t == "type":
             el = _find(driver, By, WebDriverWait, EC, action)
             val = action.get("value") or ""
@@ -96,6 +139,7 @@ def _run_one(driver, By, WebDriverWait, EC, action, index, screenshots):
             driver.save_screenshot(path)
             screenshots.append(path)
             step["path"] = path
+            step["countTowardsLimit"] = action.get("countTowardsLimit", True)
         elif t == "wait":
             duration = float(action.get("duration", action.get("value", 1)))
             time.sleep(duration)
@@ -141,8 +185,41 @@ def run_test(spec):
     page_load_strategy = options.get("page_load_strategy", "normal")
     if page_load_strategy not in ("normal", "eager", "none"):
         page_load_strategy = "normal"
+    max_actions = int(options.get("max_actions", 50))
     width = int(options.get("width", 1920))
     height = int(options.get("height", 1080))
+
+    # 展开 foreach 循环
+    expanded_actions = []
+    for action in actions:
+        if action.get("type") == "foreach":
+            items = action.get("items") or []
+            if not isinstance(items, list):
+                return _usage_error("foreach 缺少 items 数组")
+            template = action.get("do") or action.get("actions") or []
+            if not isinstance(template, list):
+                return _usage_error("foreach 缺少 do/actions 数组")
+            for idx, item in enumerate(items):
+                for tmpl in template:
+                    expanded = dict(tmpl)
+                    # 简单模板替换：{{item}}、{{index}}、{{key}}
+                    def replace(val):
+                        if isinstance(val, str):
+                            return val.replace("{{item}}", json.dumps(item, ensure_ascii=False)).replace("{{index}}", str(idx)).replace("{{key}}", str(idx))
+                        return val
+                    def walk(obj):
+                        if isinstance(obj, dict):
+                            return {k: walk(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [walk(v) for v in obj]
+                        else:
+                            return replace(obj)
+                    expanded = walk(expanded)
+                    expanded["_foreach_index"] = idx
+                    expanded_actions.append(expanded)
+        else:
+            expanded_actions.append(action)
+    actions = expanded_actions
 
     # 惰性导入：缺依赖时给出可读错误（仍为 JSON）
     try:
@@ -176,13 +253,23 @@ def run_test(spec):
         result["title"] = driver.title
 
         screenshots = []
+        action_count = 0
         for i, action in enumerate(actions):
+            if action_count >= max_actions:
+                result["success"] = False
+                result["error"] = "超过最大动作数限制 (max_actions=%d)" % max_actions
+                break
             if not isinstance(action, dict):
                 result["success"] = False
                 result["error"] = "第 %d 个 action 不是对象" % i
                 break
             step = _run_one(driver, By, WebDriverWait, EC, action, i, screenshots)
             result["actions"].append(step)
+            # 计算是否计入动作上限
+            if step.get("type") == "screenshot" and step.get("countTowardsLimit") is False:
+                pass  # 不计入
+            else:
+                action_count += 1
             if not step.get("ok", True):
                 result["success"] = False
                 result["error"] = "第 %d 步失败: %s" % (i, step.get("error", ""))
