@@ -138,6 +138,9 @@ def run_test(spec):
     headless = options.get("headless", False)
     if headless is None:
         headless = False
+    page_load_strategy = options.get("page_load_strategy", "normal")
+    if page_load_strategy not in ("normal", "eager", "none"):
+        page_load_strategy = "normal"
     width = int(options.get("width", 1920))
     height = int(options.get("height", 1080))
 
@@ -158,6 +161,7 @@ def run_test(spec):
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=%d,%d" % (width, height))
+    chrome_options.page_load_strategy = page_load_strategy
     if headless:
         chrome_options.add_argument("--headless=new")
 
