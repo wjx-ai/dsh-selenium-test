@@ -53,6 +53,26 @@ dsh plugin --profile web add github:wjx-ai/dsh-selenium-test
 
 装好并重启后,直接让 Agent 调用 `selenium_test` 工具对指定页面执行浏览器自动化测试即可。
 
+## 变更记录
+
+### v1.1（2026-07-08）—— SPA 健壮性升级（需重启 DSH 生效）
+
+`lib/selenium_test.py` 新增/增强（向后兼容,旧调用不受影响）：
+
+- **`execute_async_script` 动作**：正确 await JS Promise（`cb` 约定绑定末位 callback；同步 `execute_script` 不会等 Promise）。
+- **`settle` 动作**：JS 睡眠 + DOM-ready 探测,吸收「点击后异步渲染未完成」竞态（`ms` 参数,默认 1000）。
+- **`_send` 就绪探测 + 重试**：`page_load_strategy=none` 时导航未落定的瞬态 `invalid argument` 自动小步重试,不再整轮崩。
+- **`assert` 活 DOM + `poll`**：默认查 `document.body.innerText`（覆盖 JS 渲染）并按 `poll` 秒轮询,SPA 异步渲染可断言；仍保留 `page_source` 兜底。
+- **`console_errors` 采集**：注入 `window.__dshErrs` + `driver.get_log('browser')`,结果回带（`collect_console` 开关,默认 true）。
+- **避免重复 `driver.get`**：首动作是 `navigate` 时不再预导航。
+- **`script_timeout` 选项**：含 `setTimeout` 的异步脚本须设足够大,否则报 `script timeout`（默认 0=用 ChromeDriver 30s）。
+
+**配套 `lib/index.js`**：schema 暴露 `execute_async_script / settle / poll / ms / implicitly_wait / collect_console / script_timeout`,输出与渲染回带 `console_errors`。
+
+**验证**：`py_compile` ✓、`node --check` ✓、`test/smoke.mjs` ✓；静态 SPA 页 e2e（异步等待/活 DOM 断言/中文/控制台错误）全绿；万象 `/wanxiang` 全量点击（登录→8 选项卡→辨证→五运四块断言）`console_errors=[]` 跑通。
+
+> **正在运行的 DSH 实例要用本升级,须重启一次**（插件在启动时注册；工具描述与 schema 亦随之更新）。
+
 ## 免责声明
 
 本插件仅用于技术学习与合法内容整理。自动化测试请遵守目标站点条款与相关法律法规,勿用于侵权、绕过风控或商业滥用;
