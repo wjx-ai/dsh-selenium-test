@@ -117,7 +117,7 @@ def _run_one(driver, By, WebDriverWait, EC, action, index, screenshots):
             js = action.get("script") or action.get("value")
             if not js:
                 raise ValueError("execute_script 缺少 script/value")
-            driver.execute_script(js)
+            step["result"] = driver.execute_script(js)
         else:
             raise ValueError("未知操作类型: %r" % t)
     except Exception as exc:  # noqa: BLE001 —— 把每步失败记入结果，不让整个测试崩掉
@@ -204,7 +204,7 @@ def run_test(spec):
 
 
 def main():
-    raw = sys.stdin.read().strip()
+    raw = sys.stdin.buffer.read().decode('utf-8').strip()
     if not raw:
         print(json.dumps(_usage_error("空输入：请通过 stdin 传入 JSON spec"), ensure_ascii=False))
         return 0
