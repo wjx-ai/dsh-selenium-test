@@ -53,6 +53,27 @@ import os
 import time
 import tempfile
 
+
+def _force_utf8_stdio():
+    """把 stdin/stdout/stderr 统一成 UTF-8。
+
+    Windows 上 Python 的 stdout 默认编码是 cp936(GBK)：若用 print 输出含中文的
+    JSON，写出的就是 GBK 字节，而父进程(JS)按 UTF-8 读取 → 中文全乱码；遇到 GBK
+    编不了的字（emoji、生僻字）更会直接 UnicodeEncodeError 让脚本崩掉、无输出。
+    这里的 reconfigure 是兜底（JS 侧同时用 `python -X utf8` 强制 UTF-8 模式）。
+    """
+    for name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 —— 老解释器/被重定向时不阻塞主流程
+            pass
+
+
+_force_utf8_stdio()
+
 # 选择器方式 -> Selenium By
 _BY_MAP = {
     "css": "CSS_SELECTOR",
@@ -243,10 +264,12 @@ def _run_one(ctx, driver, By, WebDriverWait, EC, action, index, screenshots):
             if not expected:
                 raise ValueError("assert 缺少 expected")
             poll = float(action.get("poll", 0))
-            # 优先查活 DOM（innerText 覆盖 JS 渲染），按 poll 秒轮询；再回退 page_source。
-            step["asserted"] = _assert_text(ctx, expected, poll)
+            # 在浏览器侧做 ASCII 安全的硬验证（中文期望值自动 \u 转义，见 _assert_text）
+            step["asserted"] = _assert_text(ctx, expected, poll, action.get("selector"))
             if not step["asserted"]:
-                raise AssertionError("断言失败：未在渲染内容/页面源码中找到子串 %r（poll=%.1fs）" % (expected, poll))
+                raise AssertionError(
+                    "断言失败：渲染内容(活 DOM innerText)中未找到 %r（poll=%.1fs）" % (expected, poll)
+                )
         elif t in ("eval", "execute_script"):
             js = action.get("script") or action.get("value")
             if not js:
@@ -275,20 +298,45 @@ def _run_one(ctx, driver, By, WebDriverWait, EC, action, index, screenshots):
     return step
 
 
-def _assert_text(ctx, expected, poll):
-    """在活 DOM 的 innerText 里找子串，按 poll 秒轮询；兜底查 page_source。"""
+def _assert_text(ctx, expected, poll, selector=None):
+    """在浏览器里做「真实内容是否渲染」的硬验证，返回布尔。
+
+    编码安全要点（本函数存在的原因）：
+      * 期望值先用 json.dumps 转义成纯 ASCII（中文 -> \\uXXXX），再拼进要下发的
+        脚本。因此发给 ChromeDriver 的请求体永远是纯 ASCII，不会因为多字节字符
+        的编码/长度计算差异被截断成 "missing command parameters"。
+      * 判断在浏览器侧用 indexOf 完成，回程只传 true/false，不再把整段中文文本
+        搬回 Python，免去回程解码风险。
+      * 断言的是 document.body.innerText（活 DOM，覆盖 JS 渲染内容），而不是只
+        看状态码或初始 page_source。
+    """
+    needle = json.dumps(expected, ensure_ascii=True)  # -> "\u5929\u533b\u95e8"（纯 ASCII）
+    if selector:
+        # 可选：把断言范围限定到某个元素（CSS 选择器）
+        scope = json.dumps(selector, ensure_ascii=True)
+        checks = [
+            "var e=document.querySelector(%s);"
+            "return !!e && (e.innerText||e.textContent||'').indexOf(%s)>=0;" % (scope, needle),
+        ]
+    else:
+        checks = [
+            "return (document.body?document.body.innerText:'').indexOf(%s)>=0;" % needle,
+            "return (document.body?document.body.textContent:'').indexOf(%s)>=0;" % needle,
+        ]
+
     deadline = time.time() + poll
-    sel = ctx.get_sel = None
     while True:
-        try:
-            body = ctx.js("return (document.body?document.body.innerText:'');")
-            if expected in (body or ""):
-                return True
-        except Exception:  # noqa: BLE001
-            pass
+        for js in checks:
+            try:
+                if ctx.js(js) is True:
+                    return True
+            except Exception:  # noqa: BLE001 —— 单次探测失败不致命，继续轮询
+                pass
         if time.time() >= deadline:
             break
         time.sleep(0.25)
+
+    # 兜底：Python 侧比对 page_source（stdio 已经是 UTF-8，解码正常时也能命中）
     try:
         return expected in ctx.driver.page_source
     except Exception:  # noqa: BLE001

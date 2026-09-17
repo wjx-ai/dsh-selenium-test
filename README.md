@@ -55,6 +55,29 @@ dsh plugin --profile web add github:wjx-ai/dsh-selenium-test
 
 ## 变更记录
 
+### v0.1.8（2026-09-16）—— 中文编码修复（需重启 DSH 生效）
+
+**修复的真实缺陷**：Windows 上 Python 的 `stdout` 默认编码是 `cp936(GBK)`。插件用
+`print(json.dumps(result, ensure_ascii=False))` 输出含中文的结果时，写出的是 **GBK 字节**，
+而 JS 侧按 **UTF-8** 读取 → 结果里所有中文（标题、步骤返回值、断言文本、console_errors）
+全部乱码，且输出本身不是合法 UTF-8；若文本含 GBK 编不了的字（emoji、生僻字），更会直接
+`UnicodeEncodeError` 让脚本崩掉、返回“脚本无输出”。
+
+**修复**：
+
+- **JS 侧**：以 `python -X utf8` 启动脚本，强制 Python 进入 UTF-8 模式。
+- **脚本侧**：`_force_utf8_stdio()` 对 stdin/stdout/stderr 执行 `reconfigure(encoding="utf-8")` 兜底。
+- **`assert` 改为浏览器端 ASCII 安全判定**：期望值先经 `json.dumps(..., ensure_ascii=True)`
+  转义为纯 ASCII（中文 → `\uXXXX`）再拼进下发的脚本，因此**发给 ChromeDriver 的请求体永远是纯 ASCII**，
+  从根本上规避多字节字符导致的 `missing command parameters`；判断在浏览器里用 `indexOf` 完成，
+  回程只传 `true/false`，断言的是 `document.body.innerText`（活 DOM，即**真实渲染内容**，非状态码）。
+  新增可选 `selector`：把断言范围限定到某个元素。
+
+**结论：脚本源与断言期望值里可以直接写中文，无需再手工 `\u` 转义。**
+
+**回归测试**：新增 `test/encoding.mjs` —— Tier 1（默认，无需 Chrome）验证 stdout 为合法 UTF-8 且中文完好；
+Tier 2（`DSH_SELENIUM_TEST_E2E=1`）在真实 Chrome 里跑「中文 eval + 中文断言」。`npm test` 已接入 Tier 1。
+
 ### v0.1.7（2026-07-08）—— SPA 健壮性升级（需重启 DSH 生效）
 
 `lib/selenium_test.py` 新增/增强（向后兼容,旧调用不受影响）：
